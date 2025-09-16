@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import mysql.connector
 from mysql.connector import pooling
@@ -116,6 +116,66 @@ def actor_details(actor_id: int):
 # -------------------------------
 # Film Page Endpoints
 # -------------------------------
+@app.get("/api/films/search")
+def search_films():
+    by = (request.args.get("by") or "all").lower()
+    q  = (request.args.get("q") or "").strip()
+    like = f"%{q}%"
+
+    sql_base = """
+      SELECT film.film_id, film.title, film.description, film.release_year, film.length, film.rating,
+            categories_single.category_name AS category, COALESCE(rentals_per_film.rental_count, 0) AS rental_count,
+            actors_per_film.actors AS actors
+      FROM film
+      LEFT JOIN (SELECT inventory.film_id AS film_id, COUNT(rental.rental_id) AS rental_count
+                FROM inventory JOIN rental ON rental.inventory_id = inventory.inventory_id
+                GROUP BY inventory.film_id) AS rentals_per_film ON rentals_per_film.film_id = film.film_id
+      LEFT JOIN (SELECT film_category.film_id AS film_id, MIN(category.name) AS category_name
+                FROM film_category JOIN category ON category.category_id = film_category.category_id
+                GROUP BY film_category.film_id) AS categories_single ON categories_single.film_id = film.film_id
+      LEFT JOIN (SELECT film_actor.film_id AS film_id,
+                GROUP_CONCAT(DISTINCT CONCAT(actor.first_name, ' ', actor.last_name)
+                ORDER BY actor.last_name, actor.first_name SEPARATOR ', ') AS actors
+                FROM film_actor
+                JOIN actor ON actor.actor_id = film_actor.actor_id
+                GROUP BY film_actor.film_id) AS actors_per_film ON actors_per_film.film_id = film.film_id
+    """
+
+    where_clause = ""
+    params = []
+
+    if by == "film" and q:
+        where_clause = "WHERE film.title LIKE %s"
+        params = [like]
+    elif by == "actor" and q:
+        where_clause = """
+          WHERE EXISTS (
+            SELECT 1
+            FROM film_actor
+            JOIN actor ON actor.actor_id = film_actor.actor_id
+            WHERE film_actor.film_id = film.film_id
+              AND (actor.first_name LIKE %s OR actor.last_name LIKE %s OR CONCAT(actor.first_name, ' ', actor.last_name) LIKE %s)
+          )
+        """
+        params = [like, like, like]
+    elif by == "genre" and q:
+        where_clause = """
+          WHERE EXISTS (
+            SELECT 1
+            FROM film_category
+            JOIN category ON category.category_id = film_category.category_id
+            WHERE film_category.film_id = film.film_id
+              AND category.name LIKE %s
+          )
+        """
+        params = [like]
+
+    sql = f"""{sql_base} {where_clause} ORDER BY film.title ASC;"""
+    conn, cur = db()
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify(rows)
 
 # -------------------------------
 # Customer Page Endpoints
