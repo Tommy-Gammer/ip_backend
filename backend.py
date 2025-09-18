@@ -177,6 +177,60 @@ def search_films():
     cur.close(); conn.close()
     return jsonify(rows)
 
+@app.post("/api/films/rent")
+def rent_film():
+    data = request.get_json() or {}
+    film_id = int(data.get("film_id") or 0)
+    customer_id = int(data.get("customer_id") or 0)
+
+    if not film_id or not customer_id:
+        return jsonify({"ok": False, "error": "film_id and customer_id are required"}), 400
+
+    conn, cur = db()
+    try:
+        # check if customer exists
+        cur.execute("SELECT 1 FROM customer WHERE customer_id = %s", (customer_id,))
+        if not cur.fetchone():
+            return jsonify({"ok": False, "error": "Customer ID does not exist"}), 404
+
+        # check if copy is available
+        cur.execute("""
+          SELECT inventory.inventory_id
+          FROM inventory
+          LEFT JOIN rental ON rental.inventory_id = inventory.inventory_id AND rental.return_date IS NULL
+          WHERE inventory.film_id = %s AND rental.inventory_id IS NULL
+          LIMIT 1;
+        """, (film_id,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"ok": False, "error": "No copies available in store"}), 409
+
+        inventory_id = row["inventory_id"]
+
+        # get next rental_id
+        cur.execute("SELECT COALESCE(MAX(rental_id), 0) + 1 AS next_id FROM rental;")
+        next_row = cur.fetchone()
+        next_id = next_row["next_id"]
+
+        # create rental
+        cur.execute("""
+          INSERT INTO rental (rental_id, rental_date, inventory_id, customer_id, staff_id)
+          VALUES (%s, UTC_TIMESTAMP(), %s, %s, 1);
+        """, (next_id, inventory_id, customer_id))
+        conn.commit()
+
+        return jsonify({
+            "ok": True,
+            "rental_id": next_id,
+            "film_id": film_id,
+            "customer_id": customer_id,
+            "inventory_id": inventory_id
+        })
+    finally:
+        cur.close()
+        conn.close()
+
+
 # -------------------------------
 # Customer Page Endpoints
 # -------------------------------
