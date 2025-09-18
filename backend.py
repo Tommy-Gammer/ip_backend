@@ -235,6 +235,47 @@ def rent_film():
 # Customer Page Endpoints
 # -------------------------------
 
+# customers search (pagination + simple filters)
+@app.get("/api/customers/search")
+def search_customers():
+    by = (request.args.get("by") or "all").lower()
+    q  = (request.args.get("q") or "").strip()
+    page = int(request.args.get("page", 1))
+    page_size = int(request.args.get("page_size", 25))
+    offset = (page - 1) * page_size
+
+    sql_base = "SELECT customer.customer_id, customer.first_name, customer.last_name, customer.email, customer.active, customer.create_date FROM customer"
+
+    where_clause = ""
+    params = []
+
+    if by == "id" and q:
+        where_clause = "WHERE customer.customer_id = %s"
+        params = [int(q)]
+    elif by == "first_name" and q:
+        where_clause = "WHERE customer.first_name LIKE %s"
+        params = [f"%{q}%"]
+    elif by == "last_name" and q:
+        where_clause = "WHERE customer.last_name LIKE %s"
+        params = [f"%{q}%"]
+    elif q:
+        where_clause = "WHERE customer.first_name LIKE %s OR customer.last_name LIKE %s OR customer.email LIKE %s"
+        like = f"%{q}%"
+        params = [like, like, like]
+
+    sql = f"""{sql_base} {where_clause} ORDER BY customer.last_name ASC, customer.first_name ASC, customer.customer_id ASC LIMIT %s OFFSET %s;"""
+    params += [page_size, offset]
+
+    conn, cur = db()
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify({"items": rows, "page": page, "page_size": page_size, "has_next": len(rows) == page_size})
+
+# -------------------------------
+# App Start
+# -------------------------------
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port)
